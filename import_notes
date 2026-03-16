@@ -1,0 +1,131 @@
+# 数据导入说明
+
+## 1. 数据来源
+- **竞赛名称**：Kaggle [Give Me Some Credit](https://www.kaggle.com/c/GiveMeSomeCredit)
+- **原始文件**：`training.csv`（需从Kaggle官网下载）
+- **记录数**：150,000 行
+- **字段数**：12 列（含第一列可能为行号的冗余列）
+
+## 2. 导入环境
+- **操作系统**：Windows 10
+- **MySQL版本**：MySQL Community Server 5.7.30
+- **字符集**：`utf8mb4`
+- **数据库名**：`credit_score`
+- **表名**：`training`
+
+## 3. 准备工作
+在导入数据前，需要在MySQL中创建数据库和表。表结构应与CSV文件的列对应（注意第一列通常是行号，需跳过）。
+
+```sql
+CREATE DATABASE IF NOT EXISTS credit_score;
+USE credit_score;
+
+CREATE TABLE training (
+    id INT AUTO_INCREMENT PRIMARY KEY,  -- 自增主键，与原CSV第一列无关
+    SeriousDlqin2yrs INT,
+    RevolvingUtilizationOfUnsecuredLines DOUBLE,
+    age INT,
+    NumberOfTime30_59DaysPastDueNotWorse INT,
+    DebtRatio DOUBLE,
+    MonthlyIncome DOUBLE,
+    NumberOfOpenCreditLinesAndLoans INT,
+    NumberOfTimes90DaysLate INT,
+    NumberRealEstateLoansOrLines INT,
+    NumberOfTime60_89DaysPastDueNotWorse INT,
+    NumberOfDependents INT
+);
+```
+
+## 4. 导入命令
+打开命令行终端，进入MySQL的bin目录（或直接在MySQL客户端中执行）。使用 `mysql` 命令时需加上 `--local-infile=1` 参数以允许加载本地文件。
+
+```bash
+cd D:\Program Files\MySQL\mysql-5.7.30-winx64\bin
+mysql -u root -p --local-infile=1
+```
+
+在MySQL命令行中执行以下命令：
+
+```sql
+USE credit_score;
+
+LOAD DATA LOCAL INFILE 'D:/training.csv'
+INTO TABLE training
+CHARACTER SET utf8mb4
+FIELDS TERMINATED BY ','      -- 逗号分隔
+ENCLOSED BY '"'                -- 字段被双引号包围
+ESCAPED BY '\\'                -- 转义符为反斜杠
+LINES TERMINATED BY '\r\n'     -- Windows换行符
+IGNORE 1 ROWS                  -- 跳过CSV标题行
+(
+    @dummy,                     -- 跳过第一列（行号或无用列）
+    SeriousDlqin2yrs,
+    RevolvingUtilizationOfUnsecuredLines,
+    age,
+    NumberOfTime30_59DaysPastDueNotWorse,
+    DebtRatio,
+    MonthlyIncome,
+    NumberOfOpenCreditLinesAndLoans,
+    NumberOfTimes90DaysLate,
+    NumberRealEstateLoansOrLines,
+    NumberOfTime60_89DaysPastDueNotWorse,
+    NumberOfDependents
+);
+```
+
+**注意**：如果CSV文件的第一列是有用的数据（例如主键），请调整字段列表。本数据集中第一列是行号，故用 `@dummy` 跳过。
+
+## 5. 导入结果
+- **成功导入行数**：150,000
+- **警告数**：33,655
+- **错误数**：0
+
+命令执行后显示：
+```
+Query OK, 150000 rows affected, 33655 warnings (0.50 sec)
+Records: 150000  Deleted: 0  Skipped: 0  Warnings: 33655
+```
+
+## 6. 导入后验证
+运行以下查询确认数据基本正确：
+
+```sql
+-- 查看目标变量取值（应为0和1）
+SELECT DISTINCT SeriousDlqin2yrs FROM training;
+
+-- 查看目标变量分布（违约率约6.68%）
+SELECT 
+    SeriousDlqin2yrs AS 是否违约,
+    COUNT(*) AS 样本数,
+    ROUND(COUNT(*) / (SELECT COUNT(*) FROM training) * 100, 2) AS 占比_百分比
+FROM training
+GROUP BY SeriousDlqin2yrs;
+
+-- 抽样查看5行数据
+SELECT SeriousDlqin2yrs, age, MonthlyIncome FROM training LIMIT 5;
+```
+
+验证结果应与以下类似：
+- 目标变量取值：0, 1
+- 违约样本占比：6.68%
+- 抽样数据：年龄、收入等值看起来合理
+
+## 7. 关于警告的说明
+导入时产生了 33,655 条警告，建议运行 `SHOW WARNINGS;` 查看具体内容。常见原因可能包括：
+- CSV中的空值被转换为 `0`（例如 `MonthlyIncome` 为空）
+- 某些字段包含非数字字符，导致转换时被截断
+- 日期格式不符合预期
+
+在后续的探索性分析中，应特别关注 `MonthlyIncome` 和 `NumberOfDependents` 等字段是否存在异常值（如收入为0），并根据业务逻辑决定如何处理（剔除、填充或单独分箱）。
+
+## 8. 相关文件
+- **导入日志**：本文件即为导入过程的记录
+- **分析脚本**：`../sql/gmscEDA_02.sql`
+
+# 核心发现
+- **目标变量分布**：违约客户占比 6.68%，数据存在不平衡。
+- **高风险组合**：额度使用率 > 0.8 且月收入 < 8000 的群体违约率高达 **22.46%**。
+- **年龄与风险**：≤40 岁的借款人违约率最高（10.35%），贡献了 36% 的坏客户。
+- **微小负债率人群**：约 7% 的客户负债比率 < 0.01，经分析为真实无负债者（年龄偏大、收入较高、无房贷），建模时应单独分箱。
+
+*最后更新：2026-03-08*
